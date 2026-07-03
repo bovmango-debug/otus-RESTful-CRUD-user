@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: homework
+data:
+  DB_HOST: "postgres-postgresql.homework.svc.cluster.local"
+  DB_PORT: "5432"
+  DB_NAME: "user_db"
