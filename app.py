@@ -1,4 +1,5 @@
 import os
+from prometheus_fastapi_instrumentator import Instrumentator
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String
@@ -28,6 +29,7 @@ class UserDB(Base):
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
+Instrumentator().instrument(app).expose(app)
 
 # Зависимость для сессии БД
 def get_db():
