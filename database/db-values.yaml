@@ -1,0 +1,9 @@
+global:
+  postgresql:
+    auth:
+      username: "user_app"
+      password: "password123"
+      database: "user_db"
+primary:
+  persistence:
+    enabled: false 
