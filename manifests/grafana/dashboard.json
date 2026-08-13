@@ -1,0 +1,73 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Application: RPS (Requests per Second)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{namespace=\"homework\"}[1m])) by (method, handler)", "legendFormat": "{{method}} {{handler}}" }
+      ]
+    },
+    {
+      "title": "Application: Latency Quantiles (Response Time)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, handler))", "legendFormat": "p50 - {{method}} {{handler}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, handler))", "legendFormat": "p95 - {{method}} {{handler}}" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, handler))", "legendFormat": "p99 - {{method}} {{handler}}" },
+        { "expr": "max(http_request_duration_seconds_max{namespace=\"homework\"}) by (method, handler)", "legendFormat": "max - {{method}} {{handler}}" }
+      ]
+    },
+    {
+      "title": "Application: Error Rate (5xx Server Errors)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{namespace=\"homework\", status=~\"5..\"}[1m])) by (method, handler)", "legendFormat": "Errors 5xx - {{method}} {{handler}}" }
+      ]
+    },
+    {
+      "title": "Ingress-Controller: RPS",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(nginx_ingress_controller_requests{namespace=\"homework\"}[1m])) by (method, path)", "legendFormat": "{{method}} {{path}}" }
+      ]
+    },
+    {
+      "title": "Ingress-Controller: Latency Quantiles",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, path))", "legendFormat": "p50 - {{method}} {{path}}" },
+        { "expr": "histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, path))", "legendFormat": "p95 - {{method}} {{path}}" },
+        { "expr": "histogram_quantile(0.99, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{namespace=\"homework\"}[1m])) by (le, method, path))", "legendFormat": "p99 - {{method}} {{path}}" },
+        { "expr": "max(nginx_ingress_controller_request_duration_seconds{namespace=\"homework\"}) by (method, path)", "legendFormat": "max - {{method}} {{path}}" }
+      ]
+    },
+    {
+      "title": "Ingress-Controller: Error Rate (5xx Errors)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(nginx_ingress_controller_requests{namespace=\"homework\", status=~\"5..\"}[1m])) by (method, path)", "legendFormat": "Ingress 5xx - {{method}} {{path}}" }
+      ]
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["homework", "prometheus"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "FastAPI and Ingress Monitoring",
+  "version": 1
+}
