@@ -3,6 +3,10 @@ kind: Service
 metadata:
   name: user-service
   namespace: homework
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/metrics"
+    prometheus.io/port: "8000"
 spec:
   selector:
     app: user-service

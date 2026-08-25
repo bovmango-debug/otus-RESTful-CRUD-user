@@ -1,65 +1,37 @@
-# Домашнее задание: Инфраструктурные паттерны (RESTful CRUD в Kubernetes)
+# Домашнее задание: Метрики, Prometheus и Grafana
 
-Данный проект реализует простейший RESTful CRUD микросервис по созданию, удалению, просмотру и обновлению пользователей. Приложение написано на Python (FastAPI) и подключено к базе данных PostgreSQL.
+Данный проект расширяет предыдущий RESTful CRUD микросервис, добавляя сбор ключевых метрик в формате Prometheus и их визуализацию в Grafana.
 
-## Инструкция по запуску
+## Добавленные метрики и PromQL-запросы
 
-### 1. Подготовка окружения
-Перед запуском требуется убедиться, что установлен и запущен `minikube` (или альтернативный локальный кластер Kubernetes), а также включен Ingress-контроллер:
-```bash
-minikube addons enable ingress
-```
+В Grafana настроены два блока графиков (с разбиением по API-методам для приложения и путям для Ingress):
 
-Добавьте тестовый домен в файл `/etc/hosts` (или `C:\Windows\System32\drivers\etc\hosts` для Windows):
-```text
-127.0.0.1 arch.homework
-```
+1. **RPS (Количество запросов в секунду)**
+   * Приложение: `sum(rate(http_requests_total{namespace="homework"}[1m])) by (method, handler)`
+   * Ingress: `sum(rate(nginx_ingress_controller_requests{namespace="homework"}[1m])) by (method, path)`
 
-### 2. Создание Namespace и установка базы данных через Helm
-Конфигурация параметров БД передается через кастомный файл настроек `database/db-values.yaml`.
+2. **Latency (Время ответа с квантилями p50, p95, p99, max)**
+   * Приложение (Квантиль 0.95): `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="homework"}[1m])) by (le, method, handler))`
+   * Ingress (Квантиль 0.95): `histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{namespace="homework"}[1m])) by (le, method, path))`
+   * *Для max используется функция `max(...)` по соответствующим метрикам длительности запроса.*
 
-```bash
-# Создаем namespace для изоляции домашнего задания
-kubectl create namespace homework
+3. **Error Rate (Количество 500-х ответов)**
+   * Приложение: `sum(rate(http_requests_total{namespace="homework", status=~"5.."}[1m])) by (method, handler)`
+   * Ingress: `sum(rate(nginx_ingress_controller_requests{namespace="homework", status=~"5.."}[1m])) by (method, path)`
 
-# Добавляем официальный репозиторий Bitnami для PostgreSQL
-helm repo add bitnami https://bitnami.com
-helm repo update
+## Настройка алертинга (Alerting) в Grafana
 
-# Устанавливаем PostgreSQL с доступами в созданный namespace
-helm install postgres bitnami/postgresql -n homework -f database/db-values.yaml
-```
+В Grafana настроены два правила оповещения (Alert Rules):
+1. **High Error Rate Alert**: Срабатывает, если количество 5xx ошибок превышает 5% от общего числа запросов в течение 2 минут (`Error Rate / Total RPS > 0.05`).
+2. **High Latency Alert**: Срабатывает, если 95-й процентиль времени ответа (p95 Latency) превышает 1.5 секунды в течение 3 минут.
 
-### 3. Запуск манифестов приложения
-Применить манифесты Kubernetes в правильном порядке. Конфигурация приложения хранится в ConfigMap, доступы к БД — в Secrets.
+## Инструкция по запуску и импорту дашборда
 
-```bash
-# 1. Применяем ConfigMap с адресом и портом БД
-kubectl apply -f k8s/01-configmap.yaml
-
-# 2. Применяем Secret с логином и паролем (в base64)
-kubectl apply -f k8s/02-secret.yaml
-
-# 3. Запускаем Deployment приложения 
-kubectl apply -f k8s/03-deployment.yaml
-
-# 4. Создаем Service для доступа к подам
-kubectl apply -f k8s/04-service.yaml
-
-# 5. Настраиваем Ingress-маршрутизацию на домен arch.homework/
-kubectl apply -f k8s/05-ingress.yaml
-```
-
-Убедиться, что все поды перешли в статус `Running`:
-```bash
-kubectl get pods -n homework
-```
-
-### 4. Проверка корректности работы (Newman / Postman)
-Для автоматического тестирования CRUD-методов используется встроенная Postman-коллекция, отправляющая запросы на базовый URL `arch.homework`.
-
-Установить `newman` (требуется Node.js) и запустить тесты:
-```bash
-npm install -g newman
-newman run postman/postman_collection.json
-```
+1. Примените обновленные манифесты:
+   ```bash
+   kubectl apply -f manifests/
+   ```
+2. Файл конфигурации дашборда находится в директории `grafana/dashboard.json`. Чтобы импортировать его в вашу Grafana:
+   * Перейдите в меню **Dashboards** -> **New** -> **Import**.
+   * Загрузите файл `dashboard.json` или вставьте его содержимое в текстовое поле.
+   * Выберите ваш Prometheus в качестве источника данных (Data Source) и нажмите **Import**.
