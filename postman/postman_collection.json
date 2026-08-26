@@ -1,22 +1,19 @@
 {
 	"info": {
-		"name": "Auth and BFF Scenario homework",
+		"name": "Stream Processing EDA Fixed Final",
 		"schema": "https://getpostman.com"
 	},
 	"item": [
 		{
-			"name": "Шаг 1: Регистрация Пользователя 1",
+			"name": "1. Создать пользователя 1 (Должен создаться аккаунт в биллинге)",
 			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Статус ответа 201\", function () {",
-							"    pm.response.to.have.status(201);",
-							"});",
+							"pm.test(\"Статус ответа 201\", function () { pm.response.to.have.status(201); });",
 							"var jsonData = pm.response.json();",
-							"pm.collectionVariables.set(\"user1_username\", jsonData.username);",
-							"pm.collectionVariables.set(\"user1_email\", jsonData.email);"
+							"pm.collectionVariables.set(\"user1_id\", jsonData.id);"
 						],
 						"type": "text/javascript"
 					}
@@ -25,9 +22,8 @@
 					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"pm.collectionVariables.set(\"user1_password\", pm.variables.replaceIn('{{$randomPassword}}'));",
-							"pm.collectionVariables.set(\"user1_random_name\", pm.variables.replaceIn('{{$randomUserName}}'));",
-							"pm.collectionVariables.set(\"user1_random_email\", pm.variables.replaceIn('{{$randomEmail}}'));"
+							"pm.collectionVariables.set(\"user1_name\", pm.variables.replaceIn('{{$randomUserName}}'));",
+							"pm.collectionVariables.set(\"user1_email\", pm.variables.replaceIn('{{$randomEmail}}'));"
 						],
 						"type": "text/javascript"
 					}
@@ -36,38 +32,100 @@
 			"request": {
 				"method": "POST",
 				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
+					{ "key": "Content-Type", "value": "application/json" }
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{user1_random_name}}\",\n    \"email\": \"{{user1_random_email}}\",\n    \"password\": \"{{user1_password}}\"\n}"
+					"raw": "{\n    \"username\": \"{{user1_name}}\",\n    \"email\": \"{{user1_email}}\"\n}"
 				},
 				"url": {
-					"raw": "{{baseUrl}}/api/v1/register",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"register"
-					]
+					"raw": "{{baseUrl}}/api/v1/users",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "users"]
 				}
 			},
 			"response": []
 		},
 		{
-			"name": "Шаг 2: Получение профиля без логина (Ожидаем 401)",
+			"name": "2. Положить деньги на счет пользователя 1 через биллинг",
 			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Статус ответа 401 Unauthorized\", function () {",
-							"    pm.response.to.have.status(401);",
+							"pm.test(\"Деньги успешно зачислены\", function () { pm.response.to.have.status(200); });"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"amount\": 500.0\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/deposit",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "deposit"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "3. Сделать заказ, на который ХВАТАЕТ денег (Цена: 200)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Заказ принят в обработку\", function () { pm.response.to.have.status(201); });"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"user_id\": {{user1_id}},\n    \"price\": 200.0\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/orders",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "orders"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "4. Проверить баланс пользователя 1 (Должно остаться 300)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"setTimeout(function(){}, 600); // Ожидаем асинхронный процессинг RabbitMQ"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Деньги успешно списаны\", function () {",
+							"    pm.expect(jsonData.balance).to.eql(300.0);",
 							"});"
 						],
 						"type": "text/javascript"
@@ -78,137 +136,34 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "{{baseUrl}}/api/v1/users/me",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"me"
-					]
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/balance",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "balance"]
 				}
 			},
 			"response": []
 		},
 		{
-			"name": "Шаг 3: Вход Пользователя 1",
+			"name": "5. Посмотреть нотификации пользователя 1 (Ожидаем письмо счастья)",
 			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Статус ответа 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
-							"var jsonData = pm.response.json();",
-							"pm.collectionVariables.set(\"user1_token\", jsonData.access_token);"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{user1_username}}\",\n    \"password\": \"{{user1_password}}\"\n}"
-				},
-				"url": {
-					"raw": "{{baseUrl}}/api/v1/login",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"login"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Шаг 4: Изменение профиля Пользователя 1",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Статус ответа 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});"
-						],
-						"type": "text/javascript"
-					}
-				},
 				{
 					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"pm.collectionVariables.set(\"user1_updated_email\", pm.variables.replaceIn('{{$randomEmail}}'));"
+							"setTimeout(function(){}, 400);"
 						],
 						"type": "text/javascript"
 					}
-				}
-			],
-			"request": {
-				"auth": {
-					"type": "bearer",
-					"bearer": [
-						{
-							"key": "token",
-							"value": "{{user1_token}}",
-							"type": "string"
-						}
-					]
 				},
-				"method": "PUT",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{user1_username}}\",\n    \"email\": \"{{user1_updated_email}}\"\n}"
-				},
-				"url": {
-					"raw": "{{baseUrl}}/api/v1/users/me",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"me"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Шаг 5: Проверка, что профиль Пользователя 1 изменился",
-			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Статус ответа 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
 							"var jsonData = pm.response.json();",
-							"pm.test(\"Email обновился успешно\", function () {",
-							"    pm.expect(jsonData.email).to.eql(pm.collectionVariables.get(\"user1_updated_email\"));",
+							"pm.test(\"Присутствует письмо счастья\", function () {",
+							"    var messages = jsonData.map(function(n) { return n.message; }).join(\" \");",
+							"    pm.expect(messages).to.include(\"успешно оформлен\");",
 							"});"
 						],
 						"type": "text/javascript"
@@ -216,144 +171,66 @@
 				}
 			],
 			"request": {
-				"auth": {
-					"type": "bearer",
-					"bearer": [
-						{
-							"key": "token",
-							"value": "{{user1_token}}",
-							"type": "string"
-						}
-					]
-				},
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "{{baseUrl}}/api/v1/users/me",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"me"
-					]
+					"raw": "{{baseUrl}}/api/v1/notifications/{{user1_id}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "notifications", "{{user1_id}}"]
 				}
 			},
 			"response": []
 		},
 		{
-			"name": "Шаг 6: Регистрация Пользователя 2",
+			"name": "6. Сделать заказ, на который НЕ ХВАТАЕТ денег (Цена: 1000)",
 			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Статус ответа 201\", function () {",
-							"    pm.response.to.have.status(201);",
-							"});",
-							"var jsonData = pm.response.json();",
-							"pm.collectionVariables.set(\"user2_username\", jsonData.username);"
+							"pm.test(\"Заказ принят\", function () { pm.response.to.have.status(201); });"
 						],
 						"type": "text/javascript"
 					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"user_id\": {{user1_id}},\n    \"price\": 1000.0\n}"
 				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/orders",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "orders"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "7. Проверить баланс пользователя 1 (Должен остаться прежним - 300)",
+			"event": [
 				{
 					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"pm.collectionVariables.set(\"user2_password\", pm.variables.replaceIn('{{$randomPassword}}'));",
-							"pm.collectionVariables.set(\"user2_random_name\", pm.variables.replaceIn('{{$randomUserName}}'));",
-							"pm.collectionVariables.set(\"user2_random_email\", pm.variables.replaceIn('{{$randomEmail}}'));"
+							"setTimeout(function(){}, 600);"
 						],
 						"type": "text/javascript"
 					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{user2_random_name}}\",\n    \"email\": \"{{user2_random_email}}\",\n    \"password\": \"{{user2_password}}\"\n}"
 				},
-				"url": {
-					"raw": "{{baseUrl}}/api/v1/register",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"register"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Шаг 7: Вход Пользователя 2",
-			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Статус ответа 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
 							"var jsonData = pm.response.json();",
-							"pm.collectionVariables.set(\"user2_token\", jsonData.access_token);"
-						],
-						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "POST",
-				"header": [
-					{
-						"key": "Content-Type",
-						"value": "application/json"
-					}
-				],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"username\": \"{{user2_username}}\",\n    \"password\": \"{{user2_password}}\"\n}"
-				},
-				"url": {
-					"raw": "{{baseUrl}}/api/v1/login",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"login"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Шаг 8: Проверка изоляции (Пользователь 2 видит только СВОЙ профиль, данные Пользователя 1 защищены)",
-			"event": [
-				{
-					"listen": "test",
-					"script": {
-						"exec": [
-							"pm.test(\"Статус ответа 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
-							"var jsonData = pm.response.json();",
-							"pm.test(\"Изоляция работает: Пользователь 2 видит только свои данные\", function () {",
-							"    pm.expect(jsonData.username).to.eql(pm.collectionVariables.get(\"user2_username\"));",
-							"    pm.expect(jsonData.username).to.not.eql(pm.collectionVariables.get(\"user1_username\"));",
+							"pm.test(\"Баланс не изменился\", function () {",
+							"    pm.expect(jsonData.balance).to.eql(300.0);",
 							"});"
 						],
 						"type": "text/javascript"
@@ -361,29 +238,50 @@
 				}
 			],
 			"request": {
-				"auth": {
-					"type": "bearer",
-					"bearer": [
-						{
-							"key": "token",
-							"value": "{{user2_token}}",
-							"type": "string"
-						}
-					]
-				},
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "{{baseUrl}}/api/v1/users/me",
-					"host": [
-						"{{baseUrl}}"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"me"
-					]
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/balance",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "balance"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "8. Посмотреть нотификации пользователя 1 (Ожидаем новое письмо горя)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"setTimeout(function(){}, 400);"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Появилось письмо горя\", function () {",
+							"    var messages = jsonData.map(function(n) { return n.message; }).join(\" \");",
+							"    pm.expect(messages).to.include(\"Недостаточно средств\");",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/notifications/{{user1_id}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "notifications", "{{user1_id}}"]
 				}
 			},
 			"response": []

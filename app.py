@@ -2,91 +2,69 @@ import os
 import sys
 import json
 import logging
-from datetime import datetime, timedelta
-import structlog
-from fastapi import FastAPI, HTTPException, Depends, Request, Response, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.security import OAuth2PasswordBearer
+import asyncio
 from pydantic import BaseModel, EmailStr
-from sqlalchemy import create_engine, Column, Integer, String
+from fastapi import FastAPI, HTTPException, Depends, status
+from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from jose import JWTError, jwt
-from passlib.context import CryptContext
-from prometheus_fastapi_instrumentator import Instrumentator
+import structlog
+import aio_pika
 
-# --- НАСТРОЙКА БЕЗОПАСНОСТИ ---
-SECRET_KEY = os.getenv("SECRET_KEY", "SUPER_SECRET_KEY_CHANGEME_12345")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/login")
-
-# --- СТРУКТУРИРОВАННОЕ JSON-ЛОГИРОВАНИЕ ---
+# --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
 logging.basicConfig(format="%(message)s", stream=sys.stdout, level=logging.INFO)
 structlog.configure(
-    processors=[
-        structlog.stdlib.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
+    processors=[structlog.stdlib.add_log_level, structlog.processors.TimeStamper(fmt="iso"), structlog.processors.JSONRenderer()],
     logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
 )
 logger = structlog.get_logger()
 
-# Требование прошлого ДЗ: Логи миграций (INFO)
-logger.info("migration_job_status", action="start", message="Database migration job initiated")
-logger.info("migration_job_status", action="finish", message="Database migration job completed successfully")
-
-# --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
+# --- ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ---
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_NAME = os.getenv("DB_NAME", "postgres")
+RABBITMQ_URL = os.getenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
-try:
-    engine = create_engine(DATABASE_URL)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base = declarative_base()
-except Exception as e:
-    logger.error("database_critical_error", error=str(e), stage="connection_failed")
-    raise e
+# --- ТАБЛИЦЫ ДЛЯ ВСЕХ ТРЕХ СЕРВИСОВ ---
 
-# Модель пользователя с хэшем пароля
+# 1. Сервис Пользователей и Заказов
 class UserDB(Base):
-    __tablename__ = "auth_users"
+    __tablename__ = "stream_users"
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
+    username = Column(String, unique=True, nullable=False)
+    email = Column(String, unique=True, nullable=False)
 
-try:
-    Base.metadata.create_all(bind=engine)
-except Exception as e:
-    logger.error("database_critical_error", error=str(e), stage="schema_creation_failed")
-    raise e
+class OrderDB(Base):
+    __tablename__ = "stream_orders"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    price = Column(Float, nullable=False)
+    status = Column(String, default="PENDING")  # PENDING, PAID, CANCELLED
+
+# 2. Сервис Биллинга
+class AccountDB(Base):
+    __tablename__ = "stream_accounts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, unique=True, nullable=False)
+    balance = Column(Float, default=0.0)
+
+# 3. Сервис Нотификаций
+class NotificationDB(Base):
+    __tablename__ = "stream_notifications"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False)
+    email = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-Instrumentator().instrument(app).expose(app)
-
-# Хелперы безопасности
-def get_password_hash(password: str):
-    return pwd_context.hash(password)
-
-def verify_password(plain_password: str, hashed_password: str):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def get_db():
     db = SessionLocal()
@@ -96,124 +74,148 @@ def get_db():
         db.close()
 
 # Схемы валидации Pydantic
-class UserRegister(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class UserUpdate(BaseModel):
+class UserCreate(BaseModel):
     username: str
     email: EmailStr
 
-class UserResponse(BaseModel):
-    id: int
-    username: str
-    email: str
-    class Config:
-        from_attributes = True
+class BalanceOperation(BaseModel):
+    amount: float
 
-# Логи жизненного цикла приложения
-@app.on_event("startup")
-def startup_event():
-    logger.info("application_lifecycle", status="started", message="FastAPI service is online")
+class OrderCreate(BaseModel):
+    user_id: int
+    price: float
 
-@app.on_event("shutdown")
-def shutdown_event():
-    logger.info("application_lifecycle", status="stopped", message="FastAPI service is shutting down")
-
-# Логирование ошибок валидации (WARN)
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.warn("validation_error", errors=exc.errors(), body=str(exc.body))
-    return Response(content=json.dumps({"detail": exc.errors()}), status_code=422, media_type="application/json")
-
-# Middleware логирования входящих HTTP-запросов (INFO)
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    client_ip = request.client.host if request.client else "unknown"
-    logger.info("http_request_incoming", method=request.method, path=request.url.path, ip=client_ip)
+# Вспомогательная функция для быстрой отправки событий в RabbitMQ
+async def publish_event(routing_key: str, data: dict):
     try:
-        response = await call_next(request)
-        return response
+        connection = await aio_pika.connect_robust(RABBITMQ_URL)
+        async with connection:
+            channel = await connection.channel()
+            await channel.default_exchange.publish(
+                aio_pika.Message(body=json.dumps(data).encode()),
+                routing_key=routing_key,
+            )
+            logger.info("rabbitmq_event_published", queue=routing_key, data=data)
     except Exception as e:
-        logger.error("application_critical_error", error=str(e), path=request.url.path)
-        return Response(content="Internal Server Error", status_code=500)
+        logger.error("rabbitmq_publish_failed", error=str(e))
 
-# Зависимость получения текущего юзера по JWT токену
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-    
-    user = db.query(UserDB).filter(UserDB.username == username).first()
-    if user is None:
-        raise credentials_exception
-    return user
+# --- API ЭНДПОИНТЫ СЕРВИСОВ ---
 
-# --- ЭНДПОИНТЫ НОВОГО ДЗ (АУТЕНТИФИКАЦИЯ И ИЗОЛЯЦИЯ ПРОФИЛЯ) ---
-
-@app.post("/api/v1/register", response_model=UserResponse, status_code=201)
-def register_user(user_data: UserRegister, db: Session = Depends(get_db)):
-    if db.query(UserDB).filter(UserDB.username == user_data.username).first():
-        logger.warn("registration_failed", detail="Username already exists", username=user_data.username)
-        raise HTTPException(status_code=400, detail="Username already registered")
-    if db.query(UserDB).filter(UserDB.email == user_data.email).first():
-        logger.warn("registration_failed", detail="Email already exists", email=user_data.email)
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    hashed_pwd = get_password_hash(user_data.password)
-    db_user = UserDB(username=user_data.username, email=user_data.email, hashed_password=hashed_pwd)
+@app.post("/api/v1/users", status_code=201)
+async def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    if db.query(UserDB).filter(UserDB.username == user.username).first():
+        raise HTTPException(status_code=400, detail="Username already exists")
+    db_user = UserDB(username=user.username, email=user.email)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    logger.info("crud_operation_success", action="register_user", user_id=db_user.id)
+    
+    # Event Collaboration: Публикуем событие создания пользователя для Биллинга
+    await publish_event("UserCreated", {"user_id": db_user.id})
     return db_user
 
-@app.post("/api/v1/login")
-def login(user_data: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(UserDB).filter(UserDB.username == user_data.username).first()
-    if not user or not verify_password(user_data.password, user.hashed_password):
-        logger.warn("login_failed", username=user_data.username)
-        raise HTTPException(status_code=401, detail="Incorrect username or password")
+# Биллинг: Положить деньги
+@app.post("/api/v1/billing/{user_id}/deposit")
+def deposit_money(user_id: int, op: BalanceOperation, db: Session = Depends(get_db)):
+    account = db.query(AccountDB).filter(AccountDB.user_id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    account.balance += op.amount
+    db.commit()
+    return {"status": "success", "balance": account.balance}
+
+# Биллинг: Посмотреть баланс
+@app.get("/api/v1/billing/{user_id}/balance")
+def get_balance(user_id: int, db: Session = Depends(get_db)):
+    account = db.query(AccountDB).filter(AccountDB.user_id == user_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return {"user_id": user_id, "balance": account.balance}
+
+# Заказы: Создать заказ (1 этап Event Collaboration)
+@app.post("/api/v1/orders", status_code=201)
+async def create_order(order: OrderCreate, db: Session = Depends(get_db)):
+    user = db.query(UserDB).filter(UserDB.id == order.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    db_order = OrderDB(user_id=order.user_id, price=order.price, status="PENDING")
+    db.add(db_order)
+    db.commit()
+    db.refresh(db_order)
     
-    access_token = create_access_token(data={"sub": user.username})
-    logger.info("login_success", username=user.username, user_id=user.id)
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Кидаем событие в брокер, запускающее цепочку "Оплата -> Письмо"
+    await publish_event("OrderCreated", {"order_id": db_order.id, "user_id": order.user_id, "price": order.price, "email": user.email})
+    return db_order
 
-# Просмотр СОБСТВЕННОГО профиля по ТЗ (Изоляция данных)
-@app.get("/api/v1/users/me", response_model=UserResponse)
-def read_current_user_profile(current_user: UserDB = Depends(get_current_user)):
-    logger.info("crud_operation_success", action="get_profile", user_id=current_user.id)
-    return current_user
-
-# Редактирование СОБСТВЕННОГО профиля по ТЗ
-@app.put("/api/v1/users/me", response_model=UserResponse)
-def update_current_user_profile(updated_data: UserUpdate, current_user: UserDB = Depends(get_current_user), db: Session = Depends(get_db)):
-    current_user.username = updated_data.username
-    current_user.email = updated_data.email
-    try:
-        db.commit()
-        db.refresh(current_user)
-        logger.info("crud_operation_success", action="update_profile", user_id=current_user.id)
-        return current_user
-    except Exception as e:
-        db.rollback()
-        logger.error("database_error", operation="update_profile", error=str(e))
-        raise HTTPException(status_code=400, detail="Username or email already exists")
+# Нотификации: Получить список "отправленных" писем пользователя
+@app.get("/api/v1/notifications/{user_id}")
+def get_notifications(user_id: int, db: Session = Depends(get_db)):
+    notifications = db.query(NotificationDB).filter(NotificationDB.user_id == user_id).all()
+    return [{"email": n.email, "message": n.message} for n in notifications]
 
 @app.get("/health")
 def health_check():
     return {"status": "OK"}
+
+# --- АСИНХРОННЫЕ СЛУШАТЕЛИ RABBITMQ (ОБРАБОТКА ПОТОКА СОБЫТИЙ) ---
+
+async def rabbitmq_consumer():
+    await asyncio.sleep(5)  # Даем время RabbitMQ на старт
+    while True:
+        try:
+            connection = await aio_pika.connect_robust(RABBITMQ_URL)
+            channel = await connection.channel()
+            
+            # Декларируем очереди
+            queue_user = await channel.declare_queue("UserCreated")
+            queue_order = await channel.declare_queue("OrderCreated")
+            
+            logger.info("rabbitmq_consumer_started", status="listening")
+            
+            # Сценарий 1: Создание аккаунта в Биллинге при создании юзера
+            async with queue_user.iterator() as queue_iter:
+                async for message in queue_iter:
+                    async with message.process():
+                        data = json.loads(message.body.decode())
+                        db = SessionLocal()
+                        if not db.query(AccountDB).filter(AccountDB.user_id == data["user_id"]).first():
+                            db.add(AccountDB(user_id=data["user_id"], balance=0.0))
+                            db.commit()
+                            logger.info("billing_account_created", user_id=data["user_id"])
+                        db.close()
+            
+            # Сценарий 2: Обработка заказа (Списание денег + Нотификация)
+            async with queue_order.iterator() as queue_iter:
+                async for message in queue_iter:
+                    async with message.process():
+                        data = json.loads(message.body.decode())
+                        db = SessionLocal()
+                        
+                        account = db.query(AccountDB).filter(AccountDB.user_id == data["user_id"]).first()
+                        order = db.query(OrderDB).filter(OrderDB.id == data["order_id"]).first()
+                        
+                        if account and order:
+                            if account.balance >= data["price"]:
+                                # Снимаем деньги (Письмо счастья)
+                                account.balance -= data["price"]
+                                order.status = "PAID"
+                                msg_text = f"Заказ {order.id} успешно оформлен! Списано {data['price']} руб."
+                            else:
+                                # Денег мало (Письмо горя)
+                                order.status = "CANCELLED"
+                                msg_text = f"Ошибка оформления заказа {order.id}. Недостаточно средств!"
+                            
+                            # Сервис нотификаций сохраняет письмо в БД
+                            db.add(NotificationDB(user_id=data["user_id"], email=data["email"], message=msg_text))
+                            db.commit()
+                            logger.info("order_processed_async", order_id=order.id, status=order.status)
+                        db.close()
+                        
+        except Exception as e:
+            logger.error("rabbitmq_consumer_error", error=str(e))
+            await asyncio.sleep(5)
+
+@app.on_event("startup")
+def startup_event():
+    asyncio.create_task(rabbitmq_consumer())
