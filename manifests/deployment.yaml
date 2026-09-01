@@ -44,3 +44,5 @@ spec:
             secretKeyRef:
               name: app-secret
               key: DB_PASSWORD
+        - name: RABBITMQ_URL
+          value: "amqp://guest:guest@rabbitmq-service:5672/"
