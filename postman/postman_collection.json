@@ -1,21 +1,29 @@
 {
 	"info": {
-		"name": "CRUD Homework Collection",
+		"name": "Stream Processing EDA Fixed Final",
 		"schema": "https://getpostman.com"
 	},
 	"item": [
 		{
-			"name": "Create User",
+			"name": "1. Создать пользователя 1 (Должен создаться аккаунт в биллинге)",
 			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
+							"pm.test(\"Статус ответа 201\", function () { pm.response.to.have.status(201); });",
 							"var jsonData = pm.response.json();",
-							"pm.collectionVariables.set(\"userId\", jsonData.id);",
-							"pm.test(\"Status code is 201\", function () {",
-							"    pm.response.to.have.status(201);",
-							"});"
+							"pm.collectionVariables.set(\"user1_id\", jsonData.id);"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"pm.collectionVariables.set(\"user1_name\", pm.variables.replaceIn('{{$randomUserName}}'));",
+							"pm.collectionVariables.set(\"user1_email\", pm.variables.replaceIn('{{$randomEmail}}'));"
 						],
 						"type": "text/javascript"
 					}
@@ -23,44 +31,101 @@
 			],
 			"request": {
 				"method": "POST",
-				"header": [],
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n    \"username\": \"ivan_ivanov\",\n    \"email\": \"ivan@homework.com\"\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
-					}
+					"raw": "{\n    \"username\": \"{{user1_name}}\",\n    \"email\": \"{{user1_email}}\"\n}"
 				},
 				"url": {
-					"raw": "http://localhost:8000",
-					"protocol": "http",
-					"host": [
-						"localhost:8000"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users"
-					]
+					"raw": "{{baseUrl}}/api/v1/users",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "users"]
 				}
 			},
 			"response": []
 		},
 		{
-			"name": "Get User",
+			"name": "2. Положить деньги на счет пользователя 1 через биллинг",
 			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Status code is 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});",
+							"pm.test(\"Деньги успешно зачислены\", function () { pm.response.to.have.status(200); });"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"amount\": 500.0\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/deposit",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "deposit"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "3. Сделать заказ, на который ХВАТАЕТ денег (Цена: 200)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Заказ принят в обработку\", function () { pm.response.to.have.status(201); });"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"user_id\": {{user1_id}},\n    \"price\": 200.0\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/orders",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "orders"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "4. Проверить баланс пользователя 1 (Должно остаться 300)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"setTimeout(function(){}, 600); // Ожидаем асинхронный процессинг RabbitMQ"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
 							"var jsonData = pm.response.json();",
-							"pm.test(\"Correct username\", function () {",
-							"    pm.expect(jsonData.username).to.eql(\"ivan_ivanov\");",
+							"pm.test(\"Деньги успешно списаны\", function () {",
+							"    pm.expect(jsonData.balance).to.eql(300.0);",
 							"});"
 						],
 						"type": "text/javascript"
@@ -71,73 +136,34 @@
 				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:8000/{{userId}}",
-					"protocol": "http",
-					"host": [
-						"localhost:8000"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"{{userId}}"
-					]
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/balance",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "balance"]
 				}
 			},
 			"response": []
 		},
 		{
-			"name": "Update User",
+			"name": "5. Посмотреть нотификации пользователя 1 (Ожидаем письмо счастья)",
 			"event": [
 				{
-					"listen": "test",
+					"listen": "prerequest",
 					"script": {
 						"exec": [
-							"pm.test(\"Status code is 200\", function () {",
-							"    pm.response.to.have.status(200);",
-							"});"
+							"setTimeout(function(){}, 400);"
 						],
 						"type": "text/javascript"
-					}
-				}
-			],
-			"request": {
-				"method": "PUT",
-				"header": [],
-				"body": {
-					"mode": "raw",
-					"raw": "{\n    \"username\": \"ivan_new_name\",\n    \"email\": \"ivan_new@homework.com\"\n}",
-					"options": {
-						"raw": {
-							"language": "json"
-						}
 					}
 				},
-				"url": {
-					"raw": "http://localhost:8000/{{userId}}",
-					"protocol": "http",
-					"host": [
-						"localhost:8000"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"{{userId}}"
-					]
-				}
-			},
-			"response": []
-		},
-		{
-			"name": "Delete User",
-			"event": [
 				{
 					"listen": "test",
 					"script": {
 						"exec": [
-							"pm.test(\"Status code is 204\", function () {",
-							"    pm.response.to.have.status(204);",
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Присутствует письмо счастья\", function () {",
+							"    var messages = jsonData.map(function(n) { return n.message; }).join(\" \");",
+							"    pm.expect(messages).to.include(\"успешно оформлен\");",
 							"});"
 						],
 						"type": "text/javascript"
@@ -145,20 +171,117 @@
 				}
 			],
 			"request": {
-				"method": "DELETE",
+				"method": "GET",
 				"header": [],
 				"url": {
-					"raw": "http://localhost:8000/{{userId}}",
-					"protocol": "http",
-					"host": [
-						"localhost:8000"
-					],
-					"path": [
-						"api",
-						"v1",
-						"users",
-						"{{userId}}"
-					]
+					"raw": "{{baseUrl}}/api/v1/notifications/{{user1_id}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "notifications", "{{user1_id}}"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "6. Сделать заказ, на который НЕ ХВАТАЕТ денег (Цена: 1000)",
+			"event": [
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Заказ принят\", function () { pm.response.to.have.status(201); });"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "POST",
+				"header": [
+					{ "key": "Content-Type", "value": "application/json" }
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"user_id\": {{user1_id}},\n    \"price\": 1000.0\n}"
+				},
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/orders",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "orders"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "7. Проверить баланс пользователя 1 (Должен остаться прежним - 300)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"setTimeout(function(){}, 600);"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Баланс не изменился\", function () {",
+							"    pm.expect(jsonData.balance).to.eql(300.0);",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/billing/{{user1_id}}/balance",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "billing", "{{user1_id}}", "balance"]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "8. Посмотреть нотификации пользователя 1 (Ожидаем новое письмо горя)",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"setTimeout(function(){}, 400);"
+						],
+						"type": "text/javascript"
+					}
+				},
+				{
+					"listen": "test",
+					"script": {
+						"exec": [
+							"pm.test(\"Статус 200\", function () { pm.response.to.have.status(200); });",
+							"var jsonData = pm.response.json();",
+							"pm.test(\"Появилось письмо горя\", function () {",
+							"    var messages = jsonData.map(function(n) { return n.message; }).join(\" \");",
+							"    pm.expect(messages).to.include(\"Недостаточно средств\");",
+							"});"
+						],
+						"type": "text/javascript"
+					}
+				}
+			],
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/api/v1/notifications/{{user1_id}}",
+					"host": ["{{baseUrl}}"],
+					"path": ["api", "v1", "notifications", "{{user1_id}}"]
 				}
 			},
 			"response": []
@@ -166,8 +289,9 @@
 	],
 	"variable": [
 		{
-			"key": "userId",
-			"value": ""
+			"key": "baseUrl",
+			"value": "http://arch.homework",
+			"type": "string"
 		}
 	]
 }

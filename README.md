@@ -1,37 +1,86 @@
-# Домашнее задание: Метрики, Prometheus и Grafana
+# Централизованное логирование (EFK-стек)
 
-Данный проект расширяет предыдущий RESTful CRUD микросервис, добавляя сбор ключевых метрик в формате Prometheus и их визуализацию в Grafana.
+В рамках этого задания CRUD микросервис был инструментирован структурированным JSON-логированием (через библиотеку `structlog`), полностью покрывающим все ключевые бизнес-события: старт/стоп приложения, входящие HTTP-запросы, успешные CRUD операции, ошибки валидации и критические сбои СУБД.
 
-## Добавленные метрики и PromQL-запросы
+## Команды для развёртывания инфраструктуры логов
 
-В Grafana настроены два блока графиков (с разбиением по API-методам для приложения и путям для Ingress):
+Развёртывание приложения и стека логирования осуществляется в изолированных пространствах имён с помощью Helm-чартов:
 
-1. **RPS (Количество запросов в секунду)**
-   * Приложение: `sum(rate(http_requests_total{namespace="homework"}[1m])) by (method, handler)`
-   * Ingress: `sum(rate(nginx_ingress_controller_requests{namespace="homework"}[1m])) by (method, path)`
+1. **Создание пространств имён:**
+   ```bash
+   kubectl create namespace otus-msa
+   kubectl create namespace logging
+   ```
 
-2. **Latency (Время ответа с квантилями p50, p95, p99, max)**
-   * Приложение (Квантиль 0.95): `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{namespace="homework"}[1m])) by (le, method, handler))`
-   * Ingress (Квантиль 0.95): `histogram_quantile(0.95, sum(rate(nginx_ingress_controller_request_duration_seconds_bucket{namespace="homework"}[1m])) by (le, method, path))`
-   * *Для max используется функция `max(...)` по соответствующим метрикам длительности запроса.*
+2. **Развёртывание микросервиса (CRUD API):**
+   ```bash
+   helm install userservice ./helm/user-service -n otus-msa
+   ```
 
-3. **Error Rate (Количество 500-х ответов)**
-   * Приложение: `sum(rate(http_requests_total{namespace="homework", status=~"5.."}[1m])) by (method, handler)`
-   * Ingress: `sum(rate(nginx_ingress_controller_requests{namespace="homework", status=~"5.."}[1m])) by (method, path)`
+3. **Развёртывание ELK/EFK стека (Elasticsearch, Fluent Bit, Kibana):**
+   ```bash
+   helm install elk ./helm/elk-chart -n logging
+   ```
 
-## Настройка алертинга (Alerting) в Grafana
+## Инструкция по работе в Kibana
 
-В Grafana настроены два правила оповещения (Alert Rules):
-1. **High Error Rate Alert**: Срабатывает, если количество 5xx ошибок превышает 5% от общего числа запросов в течение 2 минут (`Error Rate / Total RPS > 0.05`).
-2. **High Latency Alert**: Срабатывает, если 95-й процентиль времени ответа (p95 Latency) превышает 1.5 секунды в течение 3 минут.
+1. Получите доступ к веб-интерфейсу Kibana:
+   * На Minikube: `minikube service kibana -n logging`
+   * На облачном кластере: используйте проброшенный NodePort `30601`.
+2. Перейдите в **Stack Management -> Index Patterns** и создайте индекс-паттерн `fluent-bit-logs-*`. В качестве временной метки выберите `@timestamp`.
+3. В разделе **Discover** настройте фильтрацию по вашему поду приложения (`kubernetes.pod.name` или `service: user-service`), чтобы отслеживать JSON-структурированные логи уровней INFO, WARN и ERROR.
 
-## Инструкция по запуску и импорту дашборда
+---
 
-1. Примените обновленные манифесты:
+## Часть 4: Stream Processing и Event Collaboration (Асинхронные заказы)
+
+Для реализации взаимодействия сервисов Заказов, Биллинга и Нотификаций был выбран архитектурный паттерн **Event Collaboration** с использованием брокера сообщений **RabbitMQ**. 
+
+### Схема взаимодействия сервисов (Sequence-диаграмма)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    Client->>Order Service: POST /api/v1/orders (Создать заказ)
+    Order Service->>Order Service: Сохранить заказ в БД (Статус: PENDING)
+    Order Service->>RabbitMQ: Publish событие: "OrderCreated"
+    Order Service-->>Client: 201 Created (Заказ принят в обработку)
+    
+    Note over RabbitMQ, Billing Service: Асинхронный процессинг событий
+    RabbitMQ->>Billing Service: Consume событие: "OrderCreated"
+    
+    alt Баланс пользователя >= Цены заказа
+        Billing Service->>Billing Service: Списать деньги со счета
+        Billing Service->>Order Service: [Внутреннее изменение] Статус заказа -> PAID
+        Billing Service->>RabbitMQ: Publish событие: "PaymentSuccess"
+    else Недостаточно средств
+        Billing Service->>Order Service: [Внутреннее изменение] Статус заказа -> CANCELLED
+        Billing Service->>RabbitMQ: Publish событие: "PaymentFailed"
+    end
+    
+    Note over RabbitMQ, Notification Service: Отправка уведомлений
+    RabbitMQ->>Notification Service: Consume события платежей
+    alt Из очереди PaymentSuccess
+        Notification Service->>Notification Service: Записать в БД "Письмо счастья"
+    else Из очереди PaymentFailed
+        Notification Service->>Notification Service: Записать в БД "Письмо горя"
+    end
+```
+
+### Инструкция по развёртыванию и запуску
+
+Все три логических сервиса (Заказы, Биллинг, Нотификации) согласно паттерну Event Collaboration упакованы в единый асинхронный контейнер приложения. Развёртывание всей инфраструктуры (включая СУБД, брокер RabbitMQ и само приложение) осуществляется из стандартных манифестов в пространстве имён `homework`:
+
+1. **Создание пространства имён (если не создано):**
+   ```bash
+   kubectl create namespace homework
+   ```
+
+2. **Запуск всей инфраструктуры одной командой:**
    ```bash
    kubectl apply -f manifests/
    ```
-2. Файл конфигурации дашборда находится в директории `grafana/dashboard.json`. Чтобы импортировать его в вашу Grafana:
-   * Перейдите в меню **Dashboards** -> **New** -> **Import**.
-   * Загрузите файл `dashboard.json` или вставьте его содержимое в текстовое поле.
-   * Выберите ваш Prometheus в качестве источника данных (Data Source) и нажмите **Import**.
+
+3. **Проверка отправленных писем (нотификаций):**
+   Для просмотра сохраненных сообщений («писем счастья» или «писем горя») используется эндпоинт: `GET /api/v1/notifications/{user_id}`.
+
