@@ -1,0 +1,11 @@
+elasticsearch:
+  image: docker.elastic.co/elasticsearch/elasticsearch:7.17.10
+  replicas: 1
+  storageSize: 4Gi
+
+kibana:
+  image: docker.elastic.co/kibana/kibana:7.17.10
+  nodePort: 30601
+
+fluentBit:
+  image: cr.fluentbit.io/fluent/fluent-bit:2.2.0
