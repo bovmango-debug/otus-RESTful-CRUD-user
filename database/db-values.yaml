@@ -3,7 +3,17 @@ global:
     auth:
       username: "user_app"
       password: "password123"
-      database: "user_db"
+      database: "billing_db" # Дефолтная база для биллинга
+
 primary:
   persistence:
-    enabled: false 
+    enabled: false
+  
+  # Автоматическое создание остальных баз при первом запуске СУБД
+  initdb:
+    scripts:
+      init-multiple-databases.sql: |
+        CREATE DATABASE orders_db;
+        CREATE DATABASE notifications_db;
+        GRANT ALL PRIVILEGES ON DATABASE orders_db TO user_app;
+        GRANT ALL PRIVILEGES ON DATABASE notifications_db TO user_app;
