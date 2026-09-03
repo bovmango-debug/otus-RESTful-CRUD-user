@@ -1,11 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-service
+  namespace: homework
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orders-service
+  template:
+    metadata:
+      labels:
+        app: orders-service
+    spec:
+      containers:
+      - name: app
+        # ЗАМЕНИТЕ НА ВАШ LOG-IN В DOCKER HUB:
+        image: your-dockerhub-username/orders-service:latest 
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DB_HOST
+          valueFrom: { configMapKeyRef: { name: app-config, key: DB_HOST } }
+        - name: DB_PORT
+          valueFrom: { configMapKeyRef: { name: app-config, key: DB_PORT } }
+        - name: DB_NAME
+          value: "orders_db" # Изолированная БД для заказов
+        - name: DB_USER
+          valueFrom: { secretKeyRef: { name: app-secret, key: DB_USER } }
+        - name: DB_PASSWORD
+          valueFrom: { secretKeyRef: { name: app-secret, key: DB_PASSWORD } }
+        - name: RABBITMQ_URL
+          value: "amqp://guest:guest@rabbitmq-service:5672/"
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: orders-service
   namespace: homework
 spec:
-  selector:
-    app: user-service
   ports:
   - port: 8000
     targetPort: 8000
+  selector:
+    app: orders-service

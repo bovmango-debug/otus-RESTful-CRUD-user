@@ -3,18 +3,42 @@ kind: Ingress
 metadata:
   name: app-ingress
   namespace: homework
-  annotations:
-    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   ingressClassName: nginx
   rules:
   - host: arch.homework
     http:
       paths:
-      - path: /
+      # 1. Запросы пользователей и биллинга уходят в billing-service
+      - path: /api/v1/users
         pathType: Prefix
         backend:
           service:
-            name: user-service
+            name: billing-service
             port:
-              number: 80
+              number: 8000
+      - path: /api/v1/billing
+        pathType: Prefix
+        backend:
+          service:
+            name: billing-service
+            port:
+              number: 8000
+
+      # 2. Запросы создания заказов уходят в orders-service
+      - path: /api/v1/orders
+        pathType: Prefix
+        backend:
+          service:
+            name: orders-service
+            port:
+              number: 8000
+
+      # 3. Запросы получения писем уходят в notifications-service
+      - path: /api/v1/notifications
+        pathType: Prefix
+        backend:
+          service:
+            name: notifications-service
+            port:
+              number: 8000
